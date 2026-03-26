@@ -4,7 +4,6 @@ import {
   ProviderType,
   ProductCategory,
   EventCategory,
-  PetGender,
 } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -15,222 +14,278 @@ function addDays(date: Date, days: number) {
   return d;
 }
 
-function makeSlots(baseDate: Date, count: number) {
+// Generate timeslots starting from tomorrow so they're always in the future
+function makeSlots(providerId: string, daysAhead: number, slotsPerDay: number) {
   const slots = [];
-  for (let i = 0; i < count; i++) {
-    const start = new Date(baseDate);
-    start.setDate(start.getDate() + i);
-    start.setHours(9 + (i % 4) * 2, 0, 0, 0); // 9am, 11am, 1pm, 3pm
-    const end = new Date(start);
-    end.setHours(end.getHours() + 1);
-    slots.push({
-      startTime: start,
-      endTime: end,
-      isAvailable: true,
-      maxCapacity: 3,
-    });
+  const hours = [9, 11, 13, 15, 17]; // 9am, 11am, 1pm, 3pm, 5pm
+  for (let day = 1; day <= daysAhead; day++) {
+    for (let h = 0; h < slotsPerDay && h < hours.length; h++) {
+      const start = new Date();
+      start.setDate(start.getDate() + day);
+      start.setHours(hours[h], 0, 0, 0);
+      const end = new Date(start);
+      end.setHours(end.getHours() + 1, 30); // 1.5 hour slots
+      slots.push({
+        providerId,
+        startTime: start,
+        endTime: end,
+        isAvailable: true,
+        maxCapacity: 3,
+        bookedCount: 0,
+      });
+    }
   }
   return slots;
+}
+
+async function upsertProvider(
+  email: string,
+  clerkId: string,
+  name: string,
+  type: ProviderType,
+  extra: object,
+) {
+  const user = await prisma.user.upsert({
+    where: { email },
+    update: { name },
+    create: {
+      clerkId,
+      email,
+      name,
+      role: UserRole.SERVICE_PROVIDER,
+      city: "Dhaka",
+    },
+  });
+  const provider = await prisma.serviceProvider.upsert({
+    where: { userId: user.id },
+    update: {},
+    create: {
+      userId: user.id,
+      name,
+      type,
+      email,
+      isVerified: true,
+      address: "Default Address",
+      city: "Dhaka",
+      phone: "0123456789",
+      ...extra,
+    },
+  });
+  // Always delete old timeslots and recreate fresh ones so they're in the future
+  await prisma.timeslot.deleteMany({ where: { providerId: provider.id } });
+  return provider;
 }
 
 async function main() {
   console.log("🌱 Seeding database...");
 
-  // ── Vet Clinic Provider ──────────────────────────────────────
-  const vetUser = await prisma.user.upsert({
-    where: { email: "dhanmondi-vet@carecompass.com" },
-    update: {},
-    create: {
-      clerkId: "seed_vet_1",
-      email: "dhanmondi-vet@carecompass.com",
-      name: "Dr. Karim Ahmed",
-      role: UserRole.SERVICE_PROVIDER,
-      city: "Dhaka",
-    },
-  });
-
-  const vetProvider = await prisma.serviceProvider.upsert({
-    where: { userId: vetUser.id },
-    update: {},
-    create: {
-      userId: vetUser.id,
-      name: "Dhanmondi Vet Clinic",
-      type: ProviderType.VET_CLINIC,
+  // ── VET CLINICS ──────────────────────────────────────────────
+  const vet1 = await upsertProvider(
+    "dhanmondi-vet@carecompass.com",
+    "seed_vet_1",
+    "Dhanmondi Vet Clinic",
+    ProviderType.VET_CLINIC,
+    {
       description:
-        "Full-service veterinary clinic with 15+ years of experience. Vaccinations, surgeries, dental care.",
+        "Full-service veterinary clinic. Vaccinations, surgeries, dental care, X-ray.",
       address: "House 12, Road 5, Dhanmondi",
       city: "Dhaka",
       phone: "01700-123456",
-      email: "dhanmondi-vet@carecompass.com",
-      isVerified: true,
       rating: 4.8,
       reviewCount: 120,
     },
-  });
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(vet1.id, 14, 4) });
 
-  // Timeslots for vet
-  await prisma.timeslot.deleteMany({ where: { providerId: vetProvider.id } });
-  await prisma.timeslot.createMany({
-    data: makeSlots(new Date(), 8).map((s) => ({
-      ...s,
-      providerId: vetProvider.id,
-    })),
-  });
-
-  // Second vet
-  const vet2User = await prisma.user.upsert({
-    where: { email: "gulshan-vet@carecompass.com" },
-    update: {},
-    create: {
-      clerkId: "seed_vet_2",
-      email: "gulshan-vet@carecompass.com",
-      name: "Dr. Nasrin Begum",
-      role: UserRole.SERVICE_PROVIDER,
-      city: "Dhaka",
-    },
-  });
-
-  const vet2Provider = await prisma.serviceProvider.upsert({
-    where: { userId: vet2User.id },
-    update: {},
-    create: {
-      userId: vet2User.id,
-      name: "Gulshan Animal Hospital",
-      type: ProviderType.VET_CLINIC,
+  const vet2 = await upsertProvider(
+    "gulshan-vet@carecompass.com",
+    "seed_vet_2",
+    "Gulshan Animal Hospital",
+    ProviderType.VET_CLINIC,
+    {
       description:
-        "Modern animal hospital with X-ray, ultrasound, and 24/7 emergency care.",
+        "Modern animal hospital with ultrasound, ECG, and 24/7 emergency care.",
       address: "Road 11, Gulshan 2",
       city: "Dhaka",
       phone: "01800-654321",
-      email: "gulshan-vet@carecompass.com",
-      isVerified: true,
       rating: 4.6,
       reviewCount: 85,
     },
-  });
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(vet2.id, 14, 3) });
 
-  await prisma.timeslot.deleteMany({ where: { providerId: vet2Provider.id } });
-  await prisma.timeslot.createMany({
-    data: makeSlots(addDays(new Date(), 1), 6).map((s) => ({
-      ...s,
-      providerId: vet2Provider.id,
-    })),
-  });
-
-  // ── Grooming Provider ────────────────────────────────────────
-  const groomUser = await prisma.user.upsert({
-    where: { email: "pawsgrooming@carecompass.com" },
-    update: {},
-    create: {
-      clerkId: "seed_groom_1",
-      email: "pawsgrooming@carecompass.com",
-      name: "Paws & Claws Grooming",
-      role: UserRole.SERVICE_PROVIDER,
-      city: "Dhaka",
-    },
-  });
-
-  const groomProvider = await prisma.serviceProvider.upsert({
-    where: { userId: groomUser.id },
-    update: {},
-    create: {
-      userId: groomUser.id,
-      name: "Paws & Claws Grooming Studio",
-      type: ProviderType.GROOMING,
+  const vet3 = await upsertProvider(
+    "uttara-vet@carecompass.com",
+    "seed_vet_3",
+    "Uttara Pet Care Hospital",
+    ProviderType.VET_CLINIC,
+    {
       description:
-        "Professional grooming for all breeds. Bath, haircut, nail trim, ear cleaning. Home service available.",
+        "Specialist in small animals, exotic pets, and birds. Friendly and affordable.",
+      address: "Sector 7, Uttara",
+      city: "Dhaka",
+      phone: "01900-222333",
+      rating: 4.5,
+      reviewCount: 52,
+    },
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(vet3.id, 10, 4) });
+
+  const vet4 = await upsertProvider(
+    "mirpur-vet@carecompass.com",
+    "seed_vet_4",
+    "Mirpur Animal Clinic",
+    ProviderType.VET_CLINIC,
+    {
+      description:
+        "Affordable vet services for all pets. Walk-ins welcome. Free annual checkup.",
+      address: "Mirpur 10, Section B",
+      city: "Dhaka",
+      phone: "01600-445566",
+      rating: 4.3,
+      reviewCount: 38,
+    },
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(vet4.id, 10, 5) });
+
+  // ── GROOMING ─────────────────────────────────────────────────
+  const groom1 = await upsertProvider(
+    "pawsgrooming@carecompass.com",
+    "seed_groom_1",
+    "Paws & Claws Grooming Studio",
+    ProviderType.GROOMING,
+    {
+      description:
+        "Professional grooming for all breeds. Bath, haircut, nail trim, ear cleaning. Home service available!",
       address: "Shop 3, Mirpur 10",
       city: "Dhaka",
       phone: "01900-111222",
-      email: "pawsgrooming@carecompass.com",
-      isVerified: true,
       rating: 4.7,
       reviewCount: 63,
     },
-  });
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(groom1.id, 14, 4) });
 
-  await prisma.timeslot.deleteMany({ where: { providerId: groomProvider.id } });
-  await prisma.timeslot.createMany({
-    data: makeSlots(new Date(), 10).map((s) => ({
-      ...s,
-      providerId: groomProvider.id,
-    })),
-  });
-
-  // ── Daycare Provider ─────────────────────────────────────────
-  const dayUser = await prisma.user.upsert({
-    where: { email: "happypaws-daycare@carecompass.com" },
-    update: {},
-    create: {
-      clerkId: "seed_day_1",
-      email: "happypaws-daycare@carecompass.com",
-      name: "Happy Paws Daycare",
-      role: UserRole.SERVICE_PROVIDER,
-      city: "Dhaka",
-    },
-  });
-
-  const dayProvider = await prisma.serviceProvider.upsert({
-    where: { userId: dayUser.id },
-    update: {},
-    create: {
-      userId: dayUser.id,
-      name: "Happy Paws Daycare Center",
-      type: ProviderType.DAYCARE,
+  const groom2 = await upsertProvider(
+    "furbaby-grooming@carecompass.com",
+    "seed_groom_2",
+    "FurBaby Grooming Salon",
+    ProviderType.GROOMING,
+    {
       description:
-        "Safe, fun daycare for dogs and cats. Trained staff, play areas, CCTV monitoring, daily updates.",
+        "Premium grooming with organic shampoos. Specializes in Poodles, Shih Tzus, and Persian cats. Home visits available.",
+      address: "Banani 11, Road 3",
+      city: "Dhaka",
+      phone: "01700-778899",
+      rating: 4.9,
+      reviewCount: 91,
+    },
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(groom2.id, 14, 3) });
+
+  const groom3 = await upsertProvider(
+    "sparkle-groom@carecompass.com",
+    "seed_groom_3",
+    "Sparkle Pet Spa",
+    ProviderType.GROOMING,
+    {
+      description:
+        "Full-service pet spa. Aromatherapy baths, teeth brushing, de-shedding treatment. Walk-ins welcome.",
+      address: "Dhanmondi 27, Road 2",
+      city: "Dhaka",
+      phone: "01800-334455",
+      rating: 4.4,
+      reviewCount: 44,
+    },
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(groom3.id, 10, 4) });
+
+  // ── DAYCARE ──────────────────────────────────────────────────
+  const day1 = await upsertProvider(
+    "happypaws-daycare@carecompass.com",
+    "seed_day_1",
+    "Happy Paws Daycare Center",
+    ProviderType.DAYCARE,
+    {
+      description:
+        "Safe, fun daycare for dogs and cats. Trained staff, outdoor play areas, CCTV monitoring, daily photo updates.",
       address: "House 7, Banani",
       city: "Dhaka",
       phone: "01700-999888",
-      email: "happypaws-daycare@carecompass.com",
-      isVerified: true,
       rating: 4.9,
       reviewCount: 47,
     },
-  });
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(day1.id, 14, 2) });
 
-  await prisma.timeslot.deleteMany({ where: { providerId: dayProvider.id } });
-  await prisma.timeslot.createMany({
-    data: makeSlots(new Date(), 7).map((s) => ({
-      ...s,
-      providerId: dayProvider.id,
-      maxCapacity: 5,
-    })),
-  });
-
-  // ── Rescue Organization ──────────────────────────────────────
-  const rescueUser = await prisma.user.upsert({
-    where: { email: "rescue@carecompass.com" },
-    update: {},
-    create: {
-      clerkId: "seed_rescue_1",
-      email: "rescue@carecompass.com",
-      name: "Dhaka Humane Society",
-      role: UserRole.SERVICE_PROVIDER,
-      city: "Dhaka",
-    },
-  });
-
-  await prisma.serviceProvider.upsert({
-    where: { userId: rescueUser.id },
-    update: {},
-    create: {
-      userId: rescueUser.id,
-      name: "Dhaka Humane Society",
-      type: ProviderType.RESCUE,
+  const day2 = await upsertProvider(
+    "petparadise-daycare@carecompass.com",
+    "seed_day_2",
+    "Pet Paradise Daycare",
+    ProviderType.DAYCARE,
+    {
       description:
-        "24/7 animal rescue and rehabilitation. Response time ~30 minutes.",
+        "Large indoor and outdoor play spaces. Separate areas for small/large dogs. Swimming pool for dogs in summer.",
+      address: "Gulshan 1, Road 17",
+      city: "Dhaka",
+      phone: "01600-112233",
+      rating: 4.7,
+      reviewCount: 33,
+    },
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(day2.id, 14, 2) });
+
+  const day3 = await upsertProvider(
+    "petclub-daycare@carecompass.com",
+    "seed_day_3",
+    "The Pet Club Daycare",
+    ProviderType.DAYCARE,
+    {
+      description:
+        "Affordable half-day and full-day options. Trained caregivers, feeding included, daily report card.",
+      address: "Uttara Sector 4",
+      city: "Dhaka",
+      phone: "01900-556677",
+      rating: 4.5,
+      reviewCount: 28,
+    },
+  );
+  await prisma.timeslot.createMany({ data: makeSlots(day3.id, 10, 3) });
+
+  // ── RESCUE ORGS ──────────────────────────────────────────────
+  const rescue1 = await upsertProvider(
+    "rescue@carecompass.com",
+    "seed_rescue_1",
+    "Dhaka Humane Society",
+    ProviderType.RESCUE,
+    {
+      description:
+        "24/7 animal rescue and rehabilitation. Response time ~30 minutes across Dhaka.",
       address: "Dhanmondi 15",
       city: "Dhaka",
       phone: "01700-RESCUE",
-      email: "rescue@carecompass.com",
-      isVerified: true,
       rating: 4.9,
       reviewCount: 210,
     },
-  });
+  );
 
-  // ── Products ─────────────────────────────────────────────────
+  const rescue2 = await upsertProvider(
+    "pawsrescue@carecompass.com",
+    "seed_rescue_2",
+    "Paws & Claws Rescue BD",
+    ProviderType.RESCUE,
+    {
+      description:
+        "Volunteer-run rescue network. Stray animal care, fostering, and adoption support.",
+      address: "Gulshan 2",
+      city: "Dhaka",
+      phone: "01800-RESCUE",
+      rating: 4.8,
+      reviewCount: 143,
+    },
+  );
+
+  // ── PRODUCTS ─────────────────────────────────────────────────
   const products = [
     {
       name: "Royal Canin Adult Dog Food",
@@ -247,61 +302,87 @@ async function main() {
       description: "Complete nutrition for adult cats. 1.2kg.",
     },
     {
+      name: "Pedigree Puppy Food",
+      category: ProductCategory.FOOD,
+      price: 950,
+      stock: 60,
+      description: "DHA-enriched food for growing puppies. 1.5kg.",
+    },
+    {
       name: "Interactive Fetch Ball Set",
       category: ProductCategory.TOYS,
       price: 450,
       stock: 30,
-      description: "Pack of 3 durable fetch balls.",
+      description: "Pack of 3 durable rubber fetch balls.",
     },
     {
       name: "Cat Scratching Post",
       category: ProductCategory.ACCESSORIES,
       price: 750,
       stock: 20,
-      description: "60cm sisal scratching post.",
+      description: "60cm sisal scratching post with base.",
     },
     {
       name: "Professional Grooming Kit",
       category: ProductCategory.GROOMING_SUPPLIES,
       price: 980,
       stock: 15,
-      description: "8-piece grooming set.",
+      description: "8-piece grooming set: brush, comb, nail clipper, scissors.",
     },
     {
       name: "Flea & Tick Treatment",
       category: ProductCategory.MEDICINE,
       price: 620,
       stock: 40,
-      description: "Monthly topical treatment.",
+      description: "Monthly topical flea and tick prevention.",
     },
     {
-      name: "Cozy Pet Bed",
+      name: "Cozy Pet Bed (Medium)",
       category: ProductCategory.ACCESSORIES,
       price: 1200,
       stock: 25,
-      description: "Orthopedic medium-size pet bed.",
+      description: "Orthopedic memory foam bed, washable cover.",
     },
     {
       name: "Dog Collar & Leash Set",
       category: ProductCategory.ACCESSORIES,
       price: 380,
       stock: 35,
-      description: "Adjustable nylon collar + 1.5m leash.",
+      description: "Adjustable nylon collar + 1.5m leash. Multiple sizes.",
+    },
+    {
+      name: "Automatic Water Fountain",
+      category: ProductCategory.ACCESSORIES,
+      price: 1650,
+      stock: 18,
+      description: "2L circulating water fountain, keeps water fresh.",
+    },
+    {
+      name: "Catnip Toy Bundle",
+      category: ProductCategory.TOYS,
+      price: 320,
+      stock: 45,
+      description: "Set of 5 catnip-filled toys for active cats.",
+    },
+    {
+      name: "Vitamin & Supplement Drops",
+      category: ProductCategory.MEDICINE,
+      price: 480,
+      stock: 55,
+      description: "Daily multivitamin for dogs and cats. 30ml bottle.",
     },
   ];
 
   for (const p of products) {
-    const existingProduct = await prisma.product.findFirst({
+    const existing = await prisma.product.findFirst({
       where: { name: p.name },
     });
-    if (!existingProduct) {
-      await prisma.product.create({
-        data: { ...p, providerId: vetProvider.id },
-      });
+    if (!existing) {
+      await prisma.product.create({ data: { ...p, providerId: vet1.id } });
     }
   }
 
-  // ── Events ───────────────────────────────────────────────────
+  // ── EVENTS ───────────────────────────────────────────────────
   const eventUser = await prisma.user.upsert({
     where: { email: "community@carecompass.com" },
     update: {},
@@ -314,7 +395,7 @@ async function main() {
     },
   });
 
-  const events = [
+  const eventsData = [
     {
       title: "Pug Meetup at Ramna Park",
       category: EventCategory.MEETUP,
@@ -322,7 +403,7 @@ async function main() {
       city: "Dhaka",
       startDate: addDays(new Date(), 2),
       description:
-        "Join fellow pug owners for a morning walk and play session.",
+        "Join fellow pug owners for a morning walk and play session. Bring treats!",
     },
     {
       title: "Cat Lovers Café Afternoon",
@@ -330,7 +411,8 @@ async function main() {
       location: "Café Purrfect, Gulshan 1",
       city: "Dhaka",
       startDate: addDays(new Date(), 5),
-      description: "A cozy afternoon meetup for cat lovers.",
+      description:
+        "A cozy afternoon meetup for cat lovers. Share stories, photos, and tips.",
     },
     {
       title: "Free Vaccination Camp — Mirpur",
@@ -339,7 +421,7 @@ async function main() {
       city: "Dhaka",
       startDate: addDays(new Date(), 12),
       description:
-        "Free rabies and parvovirus vaccination. First 200 pets free.",
+        "Free rabies and parvovirus vaccination for dogs and cats. First 200 pets free.",
       maxAttendees: 200,
     },
     {
@@ -348,28 +430,40 @@ async function main() {
       location: "Uttara Sector 7 Park",
       city: "Dhaka",
       startDate: addDays(new Date(), 18),
-      description: "Beginner-friendly dog obedience workshop.",
+      description:
+        "Beginner-friendly dog obedience: sit, stay, recall. Certified trainer.",
       isFree: false,
       fee: 500,
     },
+    {
+      title: "Annual Pet Show 2026",
+      category: EventCategory.PET_SHOW,
+      location: "Bashundhara City Convention Hall",
+      city: "Dhaka",
+      startDate: addDays(new Date(), 30),
+      description:
+        "Bangladesh's biggest pet show! Competitions, prizes, vendor stalls.",
+      isFree: false,
+      fee: 200,
+      maxAttendees: 500,
+    },
   ];
 
-  for (const e of events) {
+  for (const e of eventsData) {
     const existing = await prisma.event.findFirst({
       where: { title: e.title },
     });
-    if (!existing) {
+    if (!existing)
       await prisma.event.create({ data: { ...e, creatorId: eventUser.id } });
-    }
   }
 
-  console.log("✅ Database seeded successfully!");
-  console.log("   • 2 vet clinics with timeslots");
-  console.log("   • 1 grooming studio with timeslots");
-  console.log("   • 1 daycare center with timeslots");
-  console.log("   • 1 rescue organization");
-  console.log("   • 8 shop products");
-  console.log("   • 4 community events");
+  console.log("✅ Seeded successfully!");
+  console.log("   • 4 vet clinics with timeslots");
+  console.log("   • 3 grooming studios with timeslots");
+  console.log("   • 3 daycare centers with timeslots");
+  console.log("   • 2 rescue organizations");
+  console.log("   • 12 shop products");
+  console.log("   • 5 community events");
 }
 
 main()
@@ -377,6 +471,4 @@ main()
     console.error(e);
     process.exit(1);
   })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+  .finally(async () => prisma.$disconnect());
